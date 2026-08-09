@@ -125,7 +125,13 @@ authRouter.put("/reset-password", async (req, res) => {
     return res.status(400).json({ error: "New password is required" });
   }
   try {
-    const { data: userData } = await supabase.auth.getUser(token);
+    const { data: userData, error: userError } = await supabase.auth.getUser(token);
+
+    if (userError || !userData?.user) {
+      return res.status(401).json({ error: "Unauthorized: Invalid token" });
+    }
+
+    // ตรวจสอบว่ารหัสผ่านเก่าถูกต้องหรือไม่
     const { error: loginError } = await supabase.auth.signInWithPassword({
       email: userData.user.email,
       password: oldPassword,
@@ -133,13 +139,30 @@ authRouter.put("/reset-password", async (req, res) => {
     if (loginError) {
       return res.status(400).json({ error: "Invalid old password" });
     }
+
     const { error } = await supabase.auth.updateUser({
       password: newPassword,
     });
     if (error) {
       return res.status(400).json({ error: error.message });
     }
-    res.status(200).json({ message: "Password updated successfully" });
+
+    // หลังเปลี่ยนรหัส session/token เก่าอาจใช้ไม่ได้ — login ใหม่แล้วส่ง token กลับ
+    const { data: newSessionData, error: newSessionError } =
+      await supabase.auth.signInWithPassword({
+        email: userData.user.email,
+        password: newPassword,
+      });
+    if (newSessionError || !newSessionData?.session) {
+      return res.status(200).json({
+        message: "Password updated successfully",
+      });
+    }
+
+    res.status(200).json({
+      message: "Password updated successfully",
+      access_token: newSessionData.session.access_token,
+    });
   } catch (error) {
     res.status(500).json({ error: "Internal server error" });
   }
