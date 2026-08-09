@@ -92,7 +92,8 @@ postRouter.get("/", async (req, res) => {
     if (category && keyword) {
       const count = await connectionPool.query(
         `SELECT COUNT(*) ${fromWithJoins}
-         WHERE categories.name ILIKE $1
+         WHERE statuses.id = 2
+           AND categories.name ILIKE $1
            AND (posts.title ILIKE $2 OR posts.description ILIKE $2 OR posts.content ILIKE $2)`,
         [category, `%${keyword}%`]
       );
@@ -100,7 +101,8 @@ postRouter.get("/", async (req, res) => {
 
       result = await connectionPool.query(
         `${selectPosts}
-         WHERE categories.name ILIKE $1
+         WHERE statuses.id = 2
+           AND categories.name ILIKE $1
            AND (posts.title ILIKE $2 OR posts.description ILIKE $2 OR posts.content ILIKE $2)
          ORDER BY posts.id DESC
          LIMIT $3 OFFSET $4`,
@@ -109,14 +111,16 @@ postRouter.get("/", async (req, res) => {
     } else if (category) {
       const count = await connectionPool.query(
         `SELECT COUNT(*) ${fromWithJoins}
-         WHERE categories.name ILIKE $1`,
+         WHERE statuses.id = 2
+           AND categories.name ILIKE $1`,
         [category]
       );
       totalPosts = Number(count.rows[0].count);
 
       result = await connectionPool.query(
         `${selectPosts}
-         WHERE categories.name ILIKE $1
+         WHERE statuses.id = 2
+           AND categories.name ILIKE $1
          ORDER BY posts.id DESC
          LIMIT $2 OFFSET $3`,
         [category, limit, offset]
@@ -124,28 +128,34 @@ postRouter.get("/", async (req, res) => {
     } else if (keyword) {
       const count = await connectionPool.query(
         `SELECT COUNT(*) ${fromWithJoins}
-         WHERE posts.title ILIKE $1
+         WHERE statuses.id = 2
+           AND (posts.title ILIKE $1
             OR posts.description ILIKE $1
-            OR posts.content ILIKE $1`,
+            OR posts.content ILIKE $1)`,
         [`%${keyword}%`]
       );
       totalPosts = Number(count.rows[0].count);
 
       result = await connectionPool.query(
         `${selectPosts}
-         WHERE posts.title ILIKE $1
+         WHERE statuses.id = 2
+           AND (posts.title ILIKE $1
             OR posts.description ILIKE $1
-            OR posts.content ILIKE $1
+            OR posts.content ILIKE $1)
          ORDER BY posts.id DESC
          LIMIT $2 OFFSET $3`,
         [`%${keyword}%`, limit, offset]
       );
     } else {
-      const count = await connectionPool.query(`SELECT COUNT(*) FROM posts`);
+      const count = await connectionPool.query(
+        `SELECT COUNT(*) ${fromWithJoins}
+         WHERE statuses.id = 2`
+      );
       totalPosts = Number(count.rows[0].count);
 
       result = await connectionPool.query(
         `${selectPosts}
+         WHERE statuses.id = 2
          ORDER BY posts.id DESC
          LIMIT $1 OFFSET $2`,
         [limit, offset]
@@ -169,11 +179,19 @@ postRouter.get("/", async (req, res) => {
   }
 });
 
-// get all posts including draft
+// get all posts including draft (รองรับ pagination สำหรับ View more)
 postRouter.get("/admin", protectAdmin, async (req, res) => {
   try {
-    // Query all posts with their category and status for admin view
-    const query = `
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+
+    const countResult = await connectionPool.query(`SELECT COUNT(*) FROM posts`);
+    const totalPosts = Number(countResult.rows[0].count);
+    const totalPages = Math.ceil(totalPosts / limit) || 1;
+
+    const result = await connectionPool.query(
+      `
       SELECT 
           posts.*, 
           categories.name AS category, 
@@ -181,15 +199,19 @@ postRouter.get("/admin", protectAdmin, async (req, res) => {
       FROM posts
       INNER JOIN categories ON posts.category_id = categories.id
       INNER JOIN statuses ON posts.status_id = statuses.id
-      ORDER BY posts.date DESC;
-    `;
+      ORDER BY posts.date DESC
+      LIMIT $1 OFFSET $2
+      `,
+      [limit, offset]
+    );
 
-    // Execute the query
-    const result = await connectionPool.query(query);
-
-    // Return all posts as the response
     return res.status(200).json({
+      totalPosts,
+      totalPages,
+      currentPage: page,
+      limit,
       posts: result.rows,
+      nextPage: page < totalPages ? page + 1 : null,
     });
   } catch (error) {
     return res.status(500).json({
